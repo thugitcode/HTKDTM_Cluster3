@@ -1,0 +1,186 @@
+/* src/static/css/style.css */
+
+:root {
+    --bg-dark: #13161c;       /* Màu nền chính (Rất tối) */
+    --panel-dark: #1e1e24;    /* Màu nền khung Chat */
+    --border-color: #2d333b;  /* Màu viền */
+    --text-primary: #ffffff;  /* Chữ trắng */
+    --text-secondary: #8b949e;/* Chữ xám */
+    --accent-blue: #58a6ff;   /* Màu xanh chủ đạo */
+    --accent-orange: #ff7b54; /* Màu cam điểm nhấn */
+    --star-gold: #ffc107;     /* Màu vàng ngôi sao */
+}
+
+body, html {
+    height: 100%; margin: 0;
+    background-color: var(--bg-dark);
+    color: var(--text-primary);
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    overflow: hidden; /* Chặn cuộn trang */
+}
+
+/* --- LAYOUT TỔNG THỂ --- */
+.app-container {
+    display: flex; flex-direction: column; height: 100vh;
+    padding: 0 20px 20px 20px; box-sizing: border-box;
+}
+
+/* HEADER */
+.app-header {
+    height: 60px; display: flex; justify-content: space-between; align-items: center;
+}
+.logo-area { font-weight: 700; color: var(--accent-blue); display: flex; gap: 10px; font-size: 1.2rem; align-items: center; }
+.header-right { display: flex; gap: 20px; align-items: center; }
+.user-avatar {
+    width: 35px; height: 35px; border-radius: 50%;
+    background: linear-gradient(135deg, #ff9a9e 0%, #fecfef 99%);
+    border: 2px solid rgba(255,255,255,0.1); cursor: pointer;
+}
+
+/* CONTENT ROW (Chứa Map và Chat) */
+.content-row { display: flex; flex: 1; gap: 20px; height: calc(100% - 60px); }
+
+/* --- MAP SECTION (Chiếm 70%) --- */
+.map-section {
+    flex: 7;
+    position: relative;
+    background-color: #222;
+    border-radius: 20px;
+    overflow: visible; /* Để dropdown tìm kiếm không bị cắt */
+    border: 1px solid var(--border-color);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+}
+#osm-map { width: 100%; height: 100%; border-radius: 20px; z-index: 1; }
+
+/* Filter đảo màu Map sang Dark Mode */
+.leaflet-layer { filter: invert(100%) hue-rotate(180deg) brightness(85%) contrast(90%); }
+
+/* Ẩn bảng text chỉ đường mặc định của Routing Machine */
+.leaflet-routing-container {
+    display: none !important;
+}
+
+/* --- CHAT SECTION (Chiếm 30%) --- */
+.chat-section {
+    flex: 3;
+    background-color: var(--panel-dark);
+    border-radius: 20px;
+    border: 1px solid var(--border-color);
+    display: flex; flex-direction: column;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+}
+.chat-header { padding: 20px; border-bottom: 1px solid #333; color: var(--text-secondary); font-weight: 600; }
+
+.chat-body { 
+    flex-grow: 1; 
+    overflow-y: auto; 
+    padding: 0; 
+}
+/* Scrollbar đẹp cho khung chat */
+.chat-body::-webkit-scrollbar { width: 6px; }
+.chat-body::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+
+/* Input Chat */
+.chat-input-wrapper { padding: 20px; margin-top: auto; border-top: 1px solid #333; }
+.chat-input-pill {
+    background: #2b2d31; border-radius: 50px; padding: 10px 20px;
+    display: flex; align-items: center; border: 1px solid var(--border-color);
+}
+.chat-input-pill input {
+    background: transparent; border: none; color: white; width: 100%; outline: none;
+}
+.btn-send {
+    width: 40px; height: 40px; border-radius: 50%; background: var(--accent-blue);
+    border: none; color: white; margin-left: 10px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+}
+.btn-send:hover { opacity: 0.9; }
+
+/* --- SEARCH BAR (Nổi trên Map) --- */
+.search-container {
+    position: absolute; top: 20px; left: 20px; z-index: 1000; width: 380px;
+}
+.floating-search {
+    background: rgba(30, 35, 45, 0.95); backdrop-filter: blur(10px);
+    border-radius: 12px; padding: 0 15px; display: flex; align-items: center;
+    border: 1px solid var(--border-color); height: 50px;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+}
+.floating-search input {
+    background: transparent; border: none; color: white; width: 100%; height: 100%; outline: none; margin-left: 10px; font-size: 0.95rem;
+}
+.floating-search i { color: var(--text-secondary); }
+
+/* Dropdown Gợi ý */
+.search-results {
+    list-style: none; margin: 5px 0 0 0; padding: 0;
+    background: #2b2d31; border: 1px solid var(--border-color);
+    border-radius: 12px; max-height: 300px; overflow-y: auto;
+    display: none; box-shadow: 0 5px 15px rgba(0,0,0,0.5);
+}
+.search-results li {
+    padding: 12px 15px; border-bottom: 1px solid #3a3d45; color: #ccc; cursor: pointer; display: flex; gap: 10px; align-items: center;
+}
+.search-results li:hover { background: #3a3d45; color: white; }
+
+/* --- STORE LIST & CARDS --- */
+.store-list { display: flex; flex-direction: column; gap: 12px; padding: 15px; }
+.store-card {
+    background-color: #2b2d31; border: 1px solid var(--border-color);
+    border-radius: 12px; padding: 15px; cursor: pointer; transition: all 0.2s;
+}
+.store-card:hover {
+    transform: translateY(-2px); border-color: var(--accent-blue); background-color: #33363d;
+}
+.store-header { display: flex; justify-content: space-between; margin-bottom: 5px; align-items: center; }
+.store-name { font-weight: 700; color: white; font-size: 0.95rem; margin: 0; }
+.store-type {
+    background: #1c2128; color: var(--accent-blue); font-size: 0.7rem;
+    padding: 2px 8px; border-radius: 4px; border: 1px solid rgba(88, 166, 255, 0.3); display: inline-block;
+}
+.store-address { font-size: 0.8rem; color: var(--text-secondary); display: flex; gap: 6px; line-height: 1.4; margin-top: 5px; }
+.store-distance {
+    margin-top: 8px; font-size: 0.75rem; color: #2ea043; font-weight: 600; display: flex; gap: 5px; align-items: center;
+}
+.loading-indicator { text-align: center; color: var(--text-secondary); padding: 30px; font-style: italic; }
+
+/* --- STAR RATING --- */
+.star-rating {
+    font-size: 0.8rem; margin-left: auto; display: flex; align-items: center; gap: 2px;
+}
+.star-filled { color: var(--star-gold) !important; text-shadow: 0 0 2px rgba(255, 193, 7, 0.3); }
+.star-empty { color: #4b5563 !important; }
+
+/* --- STORE DETAIL VIEW --- */
+.store-detail-container { animation: fadeIn 0.3s; }
+.detail-header {
+    background: #2b2d31; padding: 15px; border-radius: 12px; margin-bottom: 15px;
+    border: 1px solid var(--accent-blue);
+    box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+}
+.btn-back {
+    background: none; border: none; color: var(--text-secondary);
+    cursor: pointer; margin-bottom: 10px; display: flex; align-items: center; gap: 5px; padding: 0;
+}
+.btn-back:hover { color: white; text-decoration: underline; }
+
+.product-tag {
+    background: #151b23; border: 1px solid #30363d; color: #c9d1d9;
+    padding: 5px 10px; border-radius: 20px; font-size: 0.8rem;
+    margin-right: 5px; margin-bottom: 5px; display: inline-block;
+}
+
+/* Review Styles */
+.review-item {
+    background-color: #26292f;
+    border-left: 3px solid var(--accent-blue);
+    padding: 10px;
+    border-radius: 4px;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+}
+.review-icon { color: var(--text-secondary); font-size: 1.2rem; margin-top: 2px; }
+.review-text { font-size: 0.85rem; color: #e6e6e6; line-height: 1.4; font-style: italic; }
+
+@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }

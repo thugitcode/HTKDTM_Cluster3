@@ -1,0 +1,15 @@
+# Database
+db.sqlite3
+
+# Environment variables
+.env
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Virtual environment
+.venv/
+venv/
+ENV/
+env/
