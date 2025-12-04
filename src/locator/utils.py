@@ -3,23 +3,40 @@ import math
 import random
 import json
 import os
+import logging
 import google.generativeai as genai
+
+# --- CẤU HÌNH LOGGER ---
+logger = logging.getLogger('locator')
 
 # Cấu hình Gemini
 try:
     genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-except:
-    pass
+except Exception as e:
+    logger.error(f"Lỗi cấu hình Gemini: {e}")
 
-# DANH SÁCH SERVER MẠNH & ỔN ĐỊNH HƠN
 OVERPASS_SERVERS = [
-    "https://overpass.nchc.org.tw/api/interpreter", # Đài Loan (Ưu tiên 1)
-    "https://lz4.overpass-api.de/api/interpreter",  # Đức (Server nén, rất nhanh)
-    "https://overpass.kumi.systems/api/interpreter", # Đức (Dự phòng)
-    "https://maps.mail.ru/osm/tools/overpass/api/interpreter", # Nga
+    "https://overpass.nchc.org.tw/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter", 
 ]
 
-# --- 1. KHO DỮ LIỆU MẪU (FALLBACK) ---
+# --- 1. KHO REVIEW THEO NGÀNH HÀNG (QUAN TRỌNG) ---
+REVIEW_TEMPLATES = {
+    'food': ["Đồ ăn ngon, giá ổn.", "Không gian đẹp, check-in tốt.", "Phục vụ hơi chậm xíu.", "Sẽ quay lại lần sau."],
+    'service': ["Dịch vụ chuyên nghiệp.", "Nhân viên nhiệt tình.", "Giá hơi cao nhưng chất lượng tốt."],
+    'fuel': ["Đổ xăng nhanh.", "Trạm rộng rãi.", "Nhân viên thân thiện."]
+}
+
+# Mapping Category -> Review Type
+CATEGORY_GROUP = {
+    'cafe': 'drink', 'coffee_shop': 'drink', 'tea': 'drink', 'bubble_tea': 'drink', 'bar': 'drink', 'pub': 'drink',
+    'restaurant': 'food', 'fast_food': 'food', 'food_court': 'food', 'bistro': 'food',
+    'supermarket': 'shopping', 'convenience': 'shopping', 'clothes': 'shopping', 'fashion': 'shopping', 'electronics': 'shopping',
+    'pharmacy': 'service', 'hairdresser': 'service', 'bank': 'service', 'hotel': 'service',
+    'fuel': 'fuel'
+}
+
+# Mapping Dữ liệu chi tiết (Sản phẩm & Mô tả)
 TAG_MAPPING = {
     'cafe': {'p': ['Cafe muối', 'Bạc xỉu', 'Trà vải'], 'd': 'Góc cafe chill.', 'type': 'Quán Cafe'},
     'restaurant': {'p': ['Món Á', 'Món Âu', 'Đặc sản'], 'd': 'Ẩm thực trọn vị.', 'type': 'Nhà hàng'},
@@ -31,19 +48,14 @@ TAG_MAPPING = {
     'bank': {'p': ['Giao dịch', 'ATM', 'Tín dụng'], 'd': 'Dịch vụ ngân hàng.', 'type': 'Ngân hàng'}
 }
 
-REVIEW_TEMPLATES = {
-    'food': ["Đồ ăn ngon, giá ổn.", "Không gian đẹp, check-in tốt.", "Phục vụ hơi chậm xíu.", "Sẽ quay lại lần sau."],
-    'service': ["Dịch vụ chuyên nghiệp.", "Nhân viên nhiệt tình.", "Giá hơi cao nhưng chất lượng tốt."],
-    'fuel': ["Đổ xăng nhanh.", "Trạm rộng rãi.", "Nhân viên thân thiện."]
-}
+def get_nearby_stores(lat, lng, radius=1500, max_results=12):
+    try:
+        lat, lng = float(lat), float(lng)
+        logger.info(f"Bắt đầu tìm kiếm cửa hàng tại tọa độ: {lat}, {lng}")
+    except ValueError: 
+        logger.warning(f"Tọa độ không hợp lệ: {lat}, {lng}")
+        return []
 
-def get_nearby_stores(lat, lng, radius=2000, max_results=15):
-    try: lat, lng = float(lat), float(lng)
-    except: return []
-
-    print(f"--- Đang tìm kiếm tại: {lat}, {lng} ---")
-
-    # Query
     query = f"""
         [out:json][timeout:15];
         (
@@ -55,13 +67,12 @@ def get_nearby_stores(lat, lng, radius=2000, max_results=15):
     
     data = fetch_overpass_data(query)
     
-    # Fallback
     if not data or 'elements' not in data:
-        print("!!! Lỗi kết nối API hoặc không có dữ liệu. Dùng Mock Data !!!")
+        logger.warning("API Overpass thất bại hoặc rỗng -> Chuyển sang Mock Data")
         return generate_mock_data(lat, lng)
         
     elements = data.get('elements', [])
-    print(f"-> Tìm thấy {len(elements)} địa điểm thô từ API.")
+    logger.info(f"API trả về {len(elements)} địa điểm thô.")
     
     raw_stores = []
     
@@ -74,6 +85,7 @@ def get_nearby_stores(lat, lng, radius=2000, max_results=15):
         if not item_lat or not item_lon or not name: continue
 
         category_key = tags.get('shop') or tags.get('amenity') or 'unknown'
+        
         meta = generate_smart_metadata(name, category_key)
 
         raw_stores.append({
@@ -85,6 +97,7 @@ def get_nearby_stores(lat, lng, radius=2000, max_results=15):
             'lng': item_lon,
             'distance': calculate_distance(lat, lng, item_lat, item_lon),
             'address': tags.get('addr:street') or "Đang cập nhật địa chỉ",
+            
             'rating': meta['rating'],
             'reviews_count': meta['reviews_count'],
             'open_hour': meta['open_hour'],
@@ -95,7 +108,8 @@ def get_nearby_stores(lat, lng, radius=2000, max_results=15):
         })
             
     sorted_stores = sorted(raw_stores, key=lambda x: x['distance'])
-    return enrich_data_with_gemini(sorted_stores, limit=8)
+    
+    return enrich_data_with_gemini_strict(sorted_stores, limit=8)
 
 def generate_smart_metadata(name, category_key):
     meta = {
@@ -104,14 +118,17 @@ def generate_smart_metadata(name, category_key):
         'open_hour': "08:00 - 22:00",
         'tags': ["Phổ biến"]
     }
+    
     template = TAG_MAPPING.get(category_key)
     if template:
         meta['products'] = template['p']
         meta['description'] = template['d']
         meta['type_display'] = template['type']
+        
         if category_key in ['cafe', 'bar', 'pub']: meta['open_hour'] = "07:00 - 23:00"
         elif category_key in ['convenience', 'fuel']: meta['open_hour'] = "24/7"
         else: meta['open_hour'] = "08:00 - 21:00"
+        
         pool = 'fuel' if category_key == 'fuel' else ('food' if category_key in ['cafe', 'restaurant'] else 'service')
         meta['review_list'] = random.sample(REVIEW_TEMPLATES.get(pool, REVIEW_TEMPLATES['service']), 2)
     else:
@@ -120,10 +137,14 @@ def generate_smart_metadata(name, category_key):
         meta['type_display'] = category_key.capitalize()
         meta['open_hour'] = "08:00 - 21:00"
         meta['review_list'] = ["Dịch vụ tốt."]
+
     return meta
 
-def enrich_data_with_gemini(stores, limit=8):
-    if not stores or not os.getenv("GEMINI_API_KEY"): return stores
+def enrich_data_with_gemini_strict(stores, limit=8):
+    if not stores or not os.getenv("GEMINI_API_KEY"):
+        logger.info("Bỏ qua AI (Không có Key hoặc danh sách rỗng)")
+        return stores
+
     try:
         mini_list = [{"id": s['id'], "n": s['name'], "cat": s['category_key']} for s in stores[:limit]]
         prompt = f"""
@@ -137,15 +158,26 @@ def enrich_data_with_gemini(stores, limit=8):
         model = genai.GenerativeModel('gemini-pro')
         response = model.generate_content(prompt)
         ai_data = json.loads(response.text.replace('```json', '').replace('```', '').strip())
-        for s in stores:
-            if str(s['id']) in ai_data:
-                d = ai_data[str(s['id'])]
-                s.update({'rating': d.get('r', s['rating']), 'reviews_count': d.get('rv', s['reviews_count']), 'open_hour': d.get('o', s['open_hour']), 'products': d.get('p', s['products']), 'description': d.get('d', s['description']), 'review_list': d.get('rv_txt', s['review_list'])})
-    except: pass
+
+        for store in stores:
+            sid = str(store['id'])
+            if sid in ai_data:
+                d = ai_data[sid]
+                store.update({
+                    'rating': d.get('r', store['rating']),
+                    'reviews_count': d.get('rv', store['reviews_count']),
+                    'open_hour': d.get('o', store['open_hour']),
+                    'products': d.get('p', store['products']),
+                    'description': d.get('d', store['description']),
+                    'review_list': d.get('rv_txt', store['review_list'])
+                })
+        logger.info("Đã làm giàu dữ liệu bằng AI thành công.")
+    except Exception as e:
+        logger.error(f"Lỗi AI Enrichment: {e}")
+        pass
     return stores
 
 def fetch_overpass_data(query):
-    # User-Agent giả lập trình duyệt thật để không bị chặn
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
         'Referer': 'https://www.google.com/'
@@ -153,25 +185,24 @@ def fetch_overpass_data(query):
     
     for url in OVERPASS_SERVERS:
         try:
-            print(f"Thử kết nối: {url} ...")
-            # Tăng timeout lên 15s để chờ server phản hồi
+            logger.debug(f"Thử kết nối: {url}")
             r = requests.get(url, params={'data': query}, headers=headers, timeout=15)
             
             if r.status_code == 200:
-                # Kiểm tra kỹ Content-Type
                 ctype = r.headers.get('Content-Type', '').lower()
                 if 'json' in ctype:
-                    print(f"-> Kết nối thành công!")
+                    logger.info(f"Kết nối thành công tới {url}")
                     return r.json()
                 else:
-                    print(f"-> Lỗi: Server trả về {ctype} (không phải JSON)")
+                    logger.warning(f"Server {url} trả về {ctype} (không phải JSON)")
             else:
-                print(f"-> Lỗi HTTP: {r.status_code}")
+                logger.warning(f"Lỗi HTTP {r.status_code} từ {url}")
                 
         except Exception as e: 
-            print(f"-> Ngoại lệ: {e}")
+            logger.warning(f"Ngoại lệ khi gọi {url}: {e}")
             continue
             
+    logger.error("Tất cả server Overpass đều thất bại.")
     return None
 
 def calculate_distance(lat1, lon1, lat2, lon2):
@@ -185,7 +216,7 @@ def calculate_distance(lat1, lon1, lat2, lon2):
     except: return 0.0
 
 def generate_mock_data(lat, lng):
-    # Fallback khi tất cả server đều sập
+    logger.info("Đang tạo Mock Data...")
     bases = [("Highlands Coffee", "Cafe"), ("Phở Cồ", "Nhà hàng"), ("WinMart+", "Tiện lợi"), ("Petrolimex", "Trạm xăng")]
     results = []
     for i, (name, stype) in enumerate(bases):

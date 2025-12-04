@@ -11,10 +11,62 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
 from pathlib import Path
+import os
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+LOG_DIR = BASE_DIR.parent / 'logs'
 
+if not LOG_DIR.exists():
+    LOG_DIR.mkdir(parents=True)
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    # Định dạng hiển thị của Log: [Thời gian] [Loại] [File:Dòng] Nội dung
+    'formatters': {
+        'verbose': {
+            'format': '[{asctime}] {levelname} [{module}:{lineno}] {message}',
+            'style': '{',
+        },
+        'simple': {
+            'format': '{levelname} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        # 1. Ghi ra File (Lưu trữ)
+        'file': {
+            'level': 'INFO', # Ghi lại từ mức INFO trở lên (INFO, WARNING, ERROR)
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': os.path.join(LOG_DIR, 'server.log'),
+            'maxBytes': 1024 * 1024 * 5, # Tối đa 5MB mỗi file
+            'backupCount': 5, # Giữ lại 5 file cũ nhất
+            'formatter': 'verbose',
+            'encoding': 'utf-8',
+        },
+        # 2. Hiện ra Console (Để bạn debug trực tiếp)
+        'console': {
+            'level': 'DEBUG',
+            'class': 'logging.StreamHandler',
+            'formatter': 'simple',
+        },
+    },
+    'loggers': {
+        # Logger cho App của bạn
+        'locator': {
+            'handlers': ['file', 'console'],
+            'level': 'INFO',
+            'propagate': True,
+        },
+        # Logger cho hệ thống Django (Chỉ ghi lỗi)
+        'django': {
+            'handlers': ['file', 'console'],
+            'level': 'ERROR', # Chỉ log khi server sập hoặc lỗi code
+            'propagate': False,
+        },
+    },
+}
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
