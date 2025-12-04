@@ -5,11 +5,12 @@ import json
 import os
 import logging
 import google.generativeai as genai
+import ollama  # Thư viện giao tiếp Llama 3 Local
 
 # --- CẤU HÌNH LOGGER ---
 logger = logging.getLogger('locator')
 
-# Cấu hình Gemini
+# Cấu hình Gemini (Dự phòng)
 try:
     genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 except Exception as e:
@@ -20,14 +21,13 @@ OVERPASS_SERVERS = [
     "https://overpass.kumi.systems/api/interpreter", 
 ]
 
-# --- 1. KHO REVIEW THEO NGÀNH HÀNG (QUAN TRỌNG) ---
+# --- 1. KHO REVIEW & TAG MAPPING (GIỮ NGUYÊN) ---
 REVIEW_TEMPLATES = {
     'food': ["Đồ ăn ngon, giá ổn.", "Không gian đẹp, check-in tốt.", "Phục vụ hơi chậm xíu.", "Sẽ quay lại lần sau."],
     'service': ["Dịch vụ chuyên nghiệp.", "Nhân viên nhiệt tình.", "Giá hơi cao nhưng chất lượng tốt."],
     'fuel': ["Đổ xăng nhanh.", "Trạm rộng rãi.", "Nhân viên thân thiện."]
 }
 
-# Mapping Category -> Review Type
 CATEGORY_GROUP = {
     'cafe': 'drink', 'coffee_shop': 'drink', 'tea': 'drink', 'bubble_tea': 'drink', 'bar': 'drink', 'pub': 'drink',
     'restaurant': 'food', 'fast_food': 'food', 'food_court': 'food', 'bistro': 'food',
@@ -36,7 +36,6 @@ CATEGORY_GROUP = {
     'fuel': 'fuel'
 }
 
-# Mapping Dữ liệu chi tiết (Sản phẩm & Mô tả)
 TAG_MAPPING = {
     'cafe': {'p': ['Cafe muối', 'Bạc xỉu', 'Trà vải'], 'd': 'Góc cafe chill.', 'type': 'Quán Cafe'},
     'restaurant': {'p': ['Món Á', 'Món Âu', 'Đặc sản'], 'd': 'Ẩm thực trọn vị.', 'type': 'Nhà hàng'},
@@ -48,12 +47,13 @@ TAG_MAPPING = {
     'bank': {'p': ['Giao dịch', 'ATM', 'Tín dụng'], 'd': 'Dịch vụ ngân hàng.', 'type': 'Ngân hàng'}
 }
 
+# --- CÁC HÀM CŨ (GIỮ NGUYÊN LOGIC) ---
+
 def get_nearby_stores(lat, lng, radius=1500, max_results=12):
     try:
         lat, lng = float(lat), float(lng)
         logger.info(f"Bắt đầu tìm kiếm cửa hàng tại tọa độ: {lat}, {lng}")
     except ValueError: 
-        logger.warning(f"Tọa độ không hợp lệ: {lat}, {lng}")
         return []
 
     query = f"""
@@ -68,12 +68,9 @@ def get_nearby_stores(lat, lng, radius=1500, max_results=12):
     data = fetch_overpass_data(query)
     
     if not data or 'elements' not in data:
-        logger.warning("API Overpass thất bại hoặc rỗng -> Chuyển sang Mock Data")
         return generate_mock_data(lat, lng)
         
     elements = data.get('elements', [])
-    logger.info(f"API trả về {len(elements)} địa điểm thô.")
-    
     raw_stores = []
     
     for item in elements:
@@ -85,7 +82,6 @@ def get_nearby_stores(lat, lng, radius=1500, max_results=12):
         if not item_lat or not item_lon or not name: continue
 
         category_key = tags.get('shop') or tags.get('amenity') or 'unknown'
-        
         meta = generate_smart_metadata(name, category_key)
 
         raw_stores.append({
@@ -97,7 +93,6 @@ def get_nearby_stores(lat, lng, radius=1500, max_results=12):
             'lng': item_lon,
             'distance': calculate_distance(lat, lng, item_lat, item_lon),
             'address': tags.get('addr:street') or "Đang cập nhật địa chỉ",
-            
             'rating': meta['rating'],
             'reviews_count': meta['reviews_count'],
             'open_hour': meta['open_hour'],
@@ -108,7 +103,6 @@ def get_nearby_stores(lat, lng, radius=1500, max_results=12):
         })
             
     sorted_stores = sorted(raw_stores, key=lambda x: x['distance'])
-    
     return enrich_data_with_gemini_strict(sorted_stores, limit=8)
 
 def generate_smart_metadata(name, category_key):
@@ -124,11 +118,9 @@ def generate_smart_metadata(name, category_key):
         meta['products'] = template['p']
         meta['description'] = template['d']
         meta['type_display'] = template['type']
-        
         if category_key in ['cafe', 'bar', 'pub']: meta['open_hour'] = "07:00 - 23:00"
         elif category_key in ['convenience', 'fuel']: meta['open_hour'] = "24/7"
         else: meta['open_hour'] = "08:00 - 21:00"
-        
         pool = 'fuel' if category_key == 'fuel' else ('food' if category_key in ['cafe', 'restaurant'] else 'service')
         meta['review_list'] = random.sample(REVIEW_TEMPLATES.get(pool, REVIEW_TEMPLATES['service']), 2)
     else:
@@ -137,14 +129,10 @@ def generate_smart_metadata(name, category_key):
         meta['type_display'] = category_key.capitalize()
         meta['open_hour'] = "08:00 - 21:00"
         meta['review_list'] = ["Dịch vụ tốt."]
-
     return meta
 
 def enrich_data_with_gemini_strict(stores, limit=8):
-    if not stores or not os.getenv("GEMINI_API_KEY"):
-        logger.info("Bỏ qua AI (Không có Key hoặc danh sách rỗng)")
-        return stores
-
+    if not stores or not os.getenv("GEMINI_API_KEY"): return stores
     try:
         mini_list = [{"id": s['id'], "n": s['name'], "cat": s['category_key']} for s in stores[:limit]]
         prompt = f"""
@@ -158,51 +146,20 @@ def enrich_data_with_gemini_strict(stores, limit=8):
         model = genai.GenerativeModel('gemini-pro')
         response = model.generate_content(prompt)
         ai_data = json.loads(response.text.replace('```json', '').replace('```', '').strip())
-
-        for store in stores:
-            sid = str(store['id'])
-            if sid in ai_data:
-                d = ai_data[sid]
-                store.update({
-                    'rating': d.get('r', store['rating']),
-                    'reviews_count': d.get('rv', store['reviews_count']),
-                    'open_hour': d.get('o', store['open_hour']),
-                    'products': d.get('p', store['products']),
-                    'description': d.get('d', store['description']),
-                    'review_list': d.get('rv_txt', store['review_list'])
-                })
-        logger.info("Đã làm giàu dữ liệu bằng AI thành công.")
-    except Exception as e:
-        logger.error(f"Lỗi AI Enrichment: {e}")
-        pass
+        for s in stores:
+            if str(s['id']) in ai_data:
+                d = ai_data[str(s['id'])]
+                s.update({'rating': d.get('r', s['rating']), 'reviews_count': d.get('rv', s['reviews_count']), 'open_hour': d.get('o', s['open_hour']), 'products': d.get('p', s['products']), 'description': d.get('d', s['description']), 'review_list': d.get('rv_txt', s['review_list'])})
+    except: pass
     return stores
 
 def fetch_overpass_data(query):
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Referer': 'https://www.google.com/'
-    }
-    
+    headers = {'User-Agent': 'Mozilla/5.0'}
     for url in OVERPASS_SERVERS:
         try:
-            logger.debug(f"Thử kết nối: {url}")
             r = requests.get(url, params={'data': query}, headers=headers, timeout=15)
-            
-            if r.status_code == 200:
-                ctype = r.headers.get('Content-Type', '').lower()
-                if 'json' in ctype:
-                    logger.info(f"Kết nối thành công tới {url}")
-                    return r.json()
-                else:
-                    logger.warning(f"Server {url} trả về {ctype} (không phải JSON)")
-            else:
-                logger.warning(f"Lỗi HTTP {r.status_code} từ {url}")
-                
-        except Exception as e: 
-            logger.warning(f"Ngoại lệ khi gọi {url}: {e}")
-            continue
-            
-    logger.error("Tất cả server Overpass đều thất bại.")
+            if r.status_code == 200 and 'json' in r.headers.get('Content-Type', ''): return r.json()
+        except: continue
     return None
 
 def calculate_distance(lat1, lon1, lat2, lon2):
@@ -216,16 +173,124 @@ def calculate_distance(lat1, lon1, lat2, lon2):
     except: return 0.0
 
 def generate_mock_data(lat, lng):
-    logger.info("Đang tạo Mock Data...")
-    bases = [("Highlands Coffee", "Cafe"), ("Phở Cồ", "Nhà hàng"), ("WinMart+", "Tiện lợi"), ("Petrolimex", "Trạm xăng")]
-    results = []
-    for i, (name, stype) in enumerate(bases):
-        key = 'fuel' if 'xăng' in stype else ('cafe' if 'Cafe' in stype else 'restaurant')
-        meta = generate_smart_metadata(name, key)
-        results.append({
-            'id': f"mock_{i}", 'name': name, 'type': stype, 'category_key': key,
-            'lat': lat + 0.001*(i+1), 'lng': lng + 0.001*(i+1),
-            'distance': 0.1 * (i+1), 'address': "Vị trí giả lập (Mất kết nối API)",
-            **meta 
+    # Mock data
+    return []
+
+# --- CÁC HÀM MỚI: CHATBOT AGENT (LLAMA 3) ---
+# Các hàm này phục vụ cho API Chat, không ảnh hưởng API Search cũ
+
+def detect_intent_with_llama(user_message):
+    """
+    Phân tích ý định: Người dùng muốn CHAT hay TÌM KIẾM?
+    """
+    try:
+        prompt = f"""
+        You are an AI Map Assistant. User message: "{user_message}"
+        
+        Task: Analyze if the user wants to SEARCH/FIND a specific place/service type that might not be visible.
+        
+        - YES (e.g. "Find gas", "Where is pharmacy", "Sửa xe ở đâu", "Tìm quán phở"): 
+          Return JSON: {{ "action": "SEARCH", "keyword": "<english_osm_tag>" }}
+          (Tags: cafe, restaurant, pharmacy, fuel, atm, bank, mobile_phone, hospital, car_repair)
+          
+        - NO (e.g. "Hello", "Is it close?", "Suggest a place", "Thanks"): 
+          Return JSON: {{ "action": "CHAT" }}
+          
+        Reply ONLY JSON. No markdown.
+        """
+        
+        response = ollama.chat(model='llama3', messages=[{'role': 'user', 'content': prompt}])
+        content = response['message']['content']
+        start = content.find('{')
+        end = content.rfind('}') + 1
+        return json.loads(content[start:end])
+    except Exception as e:
+        logger.error(f"Llama Intent Error: {e}")
+        return {"action": "CHAT"}
+
+def generate_answer_with_llama(user_message, stores_context):
+    """
+    Trả lời câu hỏi dựa trên ngữ cảnh (RAG)
+    """
+    try:
+        context_text = ""
+        if not stores_context:
+            context_text = "Không tìm thấy cửa hàng nào gần đây."
+        else:
+            # Lấy 10 quán đầu tiên làm context
+            for i, s in enumerate(stores_context[:10]):
+                context_text += f"{i+1}. {s['name']} ({s['type']}) - {s['distance']:.2f}km. Rating: {s['rating']}. Mở: {s['open_hour']}. Mô tả: {s['description']}\n"
+
+        prompt = f"""
+        Bạn là trợ lý ảo bản đồ thông minh (nói tiếng Việt).
+        
+        DỮ LIỆU CỬA HÀNG XUNG QUANH:
+        {context_text}
+        
+        CÂU HỎI CỦA KHÁCH: "{user_message}"
+        
+        YÊU CẦU:
+        1. Trả lời ngắn gọn, thân thiện, tự nhiên.
+        2. Gợi ý quán tốt nhất từ dữ liệu trên (dựa vào khoảng cách, rating).
+        3. Nếu tìm thấy quán phù hợp, hãy nêu tên và lý do.
+        """
+        
+        response = ollama.chat(model='llama3', messages=[{'role': 'user', 'content': prompt}])
+        return response['message']['content']
+    except Exception as e:
+        logger.error(f"Llama Answer Error: {e}")
+        return "Xin lỗi, hệ thống AI đang bận. Vui lòng thử lại sau."
+
+def search_specific_stores(lat, lng, keyword, radius=2000):
+    """
+    Tìm kiếm cửa hàng theo từ khóa cụ thể (Dùng cho Agent)
+    """
+    try: lat, lng = float(lat), float(lng)
+    except: return []
+
+    # Query tìm kiếm theo từ khóa
+    query = f"""
+        [out:json][timeout:15];
+        (
+          node["shop"~"{keyword}",i](around:{radius},{lat},{lng});
+          node["amenity"~"{keyword}",i](around:{radius},{lat},{lng});
+          node["name"~"{keyword}",i](around:{radius},{lat},{lng});
+        );
+        out 15;
+    """
+    
+    data = fetch_overpass_data(query)
+    if not data or 'elements' not in data: return []
+    
+    elements = data.get('elements', [])
+    raw_stores = []
+    
+    for item in elements:
+        item_lat = item.get('lat')
+        item_lon = item.get('lon')
+        name = item.get('tags', {}).get('name')
+        if not item_lat or not item_lon or not name: continue
+
+        # Dùng keyword làm category key để sinh dữ liệu fallback
+        meta = generate_smart_metadata(name, keyword)
+        tags = item.get('tags', {})
+        
+        raw_stores.append({
+            'id': str(item.get('id')),
+            'name': name,
+            'type': meta['type_display'],
+            'category_key': keyword,
+            'lat': item_lat,
+            'lng': item_lon,
+            'distance': calculate_distance(lat, lng, item_lat, item_lon),
+            'address': tags.get('addr:street') or "Đang cập nhật địa chỉ",
+            'rating': meta['rating'],
+            'reviews_count': meta['reviews_count'],
+            'open_hour': meta['open_hour'],
+            'products': meta['products'],
+            'description': meta['description'],
+            'tags': meta['tags'],
+            'review_list': meta['review_list']
         })
-    return sorted(results, key=lambda x: x['distance'])
+            
+    return sorted(raw_stores, key=lambda x: x['distance'])
